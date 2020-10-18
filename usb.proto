@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+
+message USBDevice {
+  uint32 usbVersionMajor = 1;
+  uint32 usbVersionMinor = 2;
+  uint32 usbVersionSubminor = 3;
+  uint32 deviceClass = 4;
+  uint32 deviceSubclass = 5;
+  uint32 deviceProtocol = 6;
+  uint32 vendorId = 7;
+  uint32 productId = 8;
+  uint32 deviceVersionMajor = 9;
+  uint32 deviceVersionMinor = 10;
+  uint32 deviceVersionSubminor = 11;
+  string manufacturerName = 12;
+  string productName = 13;
+  string serialNumber = 14;
+  uint32 selectedConfiguration = 15;
+  repeated USBConfiguration configurations = 16;
+}
+
+message USBConfiguration {
+  uint32 configurationValue = 1;
+  string configurationName = 2;
+  repeated USBInterface interfaces = 3;
+}
+
+message USBInterface {
+  uint32 interfaceNumber = 1;
+  repeated USBAlternateInterface alternates = 2;
+}
+
+message USBAlternateInterface {
+  uint32 alternateSetting = 1;
+  uint32 interfaceClass = 2;
+  uint32 interfaceSubclass = 3;
+  uint32 interfaceProtocol = 4;
+  string interfaceName = 5;
+  repeated USBEndpoint endpoints = 6;
+}
+
+enum USBDirection {
+  IN = 0;
+  OUT = 1;
+}
+
+enum USBEndpointType {
+  BULK = 0;
+  INTERRUPT = 1;
+  ISOCHRONOUS = 2;
+}
+
+enum USBEventType {
+  CONNECTED = 0;
+  DISCONNECTED = 1;
+  ERROR = 2;
+}
+
+message USBEndpoint {
+   uint32 endpointNumber = 1;
+   USBDirection direction = 2;
+   USBEndpointType type = 3;
+   uint64 packetSize = 4;
+}

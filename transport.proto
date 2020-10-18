@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+// Direction is from Client to Server
+message DeviceConnected {
+  string serialNumber = 1;
+}
+
+message DataFromDevice {
+  string serialNumber = 1;
+  bytes data = 2;
+}
+
+message DataToDeviceResult {
+  string correlationId = 1;
+  bool success = 2;
+}
+
+message DataToDevice {
+  string serialNumber = 1;
+  string correlationId = 2;
+  bytes data = 3;
+}
+
+message ServerMessage {
+  oneof message {
+    DeviceConnected deviceConnected = 1;
+    DataFromDevice fromDeviceMessage = 2;
+    DataToDeviceResult toDeviceResult = 3;
+  }
+}
+
+message ClientMessage {
+  oneof message {
+    DataToDevice toDevice = 1;
+  }
+}

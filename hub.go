@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"github.com/gorilla/websocket"
 	"net"
+	"net/http"
 )
 
 // Hub maintains the set of active clients and broadcasts messages to the
@@ -13,12 +15,19 @@ type Hub struct {
 
 	// Registered clients.
 	devices map[*RemoteDevice]bool
+
+	upgrader *websocket.Upgrader
 }
 
 func newHub(localSocket *net.Listener) *Hub {
+	upgrader := websocket.Upgrader{ CheckOrigin: func(request *http.Request) bool {
+		return true
+	}}
+
 	return &Hub{
 		localSocket: localSocket,
 		devices:    make(map[*RemoteDevice]bool),
+		upgrader: &upgrader,
 	}
 }
 

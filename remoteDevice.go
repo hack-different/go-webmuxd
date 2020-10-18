@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
 	"log"
 	"net/http"
 	"time"
@@ -51,7 +52,7 @@ func (remoteDevice *RemoteDevice) readPump() {
 	remoteDevice.conn.SetReadDeadline(time.Now().Add(pongWait))
 	remoteDevice.conn.SetPongHandler(func(string) error { remoteDevice.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
-		_, _, err := remoteDevice.conn.ReadMessage()
+		_, message, err := remoteDevice.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
@@ -59,6 +60,21 @@ func (remoteDevice *RemoteDevice) readPump() {
 			break
 		}
 
+		var serverMessage = &ServerMessage{}
+		err = proto.Unmarshal(message, serverMessage)
+		if err != nil {
+			log.Println(err)
+		}
+
+		switch serverMessage.Message.(type) {
+		case *ServerMessage_DeviceConnected:
+			deviceConnectedMessage := serverMessage.GetDeviceConnected()
+			fmt.Printf("Device Connected %s\n", deviceConnectedMessage.SerialNumber)
+		case *ServerMessage_FromDeviceMessage:
+
+		case *ServerMessage_ToDeviceResult:
+
+		}
 	}
 }
 
@@ -69,10 +85,9 @@ func (remoteDevice *RemoteDevice) readPump() {
 // executing all writes from this goroutine.
 func (remoteDevice *RemoteDevice) writePump() {
 	ticker := time.NewTicker(pingPeriod)
-	defer func() {
-		ticker.Stop()
-		remoteDevice.conn.Close()
-	}()
+	defer ticker.Stop()
+	defer remoteDevice.conn.Close()
+
 	for {
 		select {
 
@@ -83,7 +98,7 @@ func (remoteDevice *RemoteDevice) writePump() {
 // serveWs handles websocket requests from the peer.
 func handleDevice(hub *Hub, writer http.ResponseWriter, reader *http.Request) {
 	fmt.Printf("New device connection: %s\n", reader.RemoteAddr)
-	conn, err := upgrader.Upgrade(writer, reader, nil)
+	conn, err := hub.upgrader.Upgrade(writer, reader, nil)
 	if err != nil {
 		log.Println(err)
 		return

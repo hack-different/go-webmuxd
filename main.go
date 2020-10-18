@@ -32,7 +32,7 @@ func main() {
 
 	go hub.runDeviceConnections()
 
-	http.HandleFunc("/device", func(writer http.ResponseWriter, reader *http.Request) {
+	http.HandleFunc("/v1/device", func(writer http.ResponseWriter, reader *http.Request) {
 		handleDevice(hub, writer, reader)
 	})
 
