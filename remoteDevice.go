@@ -70,7 +70,7 @@ func (remoteDevice *RemoteDevice) readPump() {
 		case *ServerMessage_DeviceConnected:
 			deviceConnectedMessage := serverMessage.GetDeviceConnected()
 			fmt.Printf("Device Connected %s\n", deviceConnectedMessage.SerialNumber)
-		case *ServerMessage_FromDeviceMessage:
+		case *ServerMessage_FromDevice:
 
 		case *ServerMessage_ToDeviceResult:
 

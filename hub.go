@@ -54,5 +54,7 @@ func (hub *Hub) runLocalConnections() {
 			hub.devices[device] = true
 		}
 
+		client := &LocalClient{ connection: &localClient }
+		go client.run()
 	}
 }

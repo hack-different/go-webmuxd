@@ -1,4 +1,5 @@
 syntax = "proto3";
+option go_package = ".;main";
 
 // Direction is from Client to Server
 message DeviceConnected {
@@ -24,7 +25,7 @@ message DataToDevice {
 message ServerMessage {
   oneof message {
     DeviceConnected deviceConnected = 1;
-    DataFromDevice fromDeviceMessage = 2;
+    DataFromDevice fromDevice = 2;
     DataToDeviceResult toDeviceResult = 3;
   }
 }
