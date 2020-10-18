@@ -28,12 +28,13 @@ func main() {
 	fmt.Printf("Local socket opened at %s\n", *socketFile)
 
 	hub := newHub(&localSocket)
+
 	go hub.runLocalConnections()
 
-	go hub.runDeviceConnections()
+	go hub.run()
 
 	http.HandleFunc("/v1/device", func(writer http.ResponseWriter, reader *http.Request) {
-		handleDevice(hub, writer, reader)
+		hub.handleRemoteConnection(writer, reader)
 	})
 
 	listenBind := fmt.Sprintf("%s:%d", *addressFlag, *portFlag)
