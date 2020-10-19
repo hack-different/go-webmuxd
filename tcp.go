@@ -16,8 +16,12 @@ const (
 )
 
 const (
-	TCPStateConnecting = 0
-	TCPStateConnected = 1
+	TCPStateNew = 0
+	TCPStateConnecting = 1
+	TCPStateConnected = 2
+	TCPStateClosing = 3
+	TCPStateClosed = 4
+	TCPStateRefused = 5
 )
 
 type TCPChannelHandler interface {
@@ -44,14 +48,19 @@ type TCPChannel struct {
 	handler TCPChannelHandler
 	sourcePort uint16
 	destinationPort uint16
-	sequence uint32
+	tx_sequence uint32
+	rx_sequence uint32
 	acknowledgement uint32
 	window uint32
 	state int
 }
 
+func (channel *TCPChannel) send(data []byte) {
+	channel.sendTCP(ACK, data)
+}
+
 func (channel *TCPChannel) sendTCP(flags uint16, data []byte) {
-	tcpSYNHeader := &TCPHeader{
+	synHeader := &TCPHeader{
 		SourcePort:      channel.sourcePort,
 		DestinationPort: channel.destinationPort,
 		Window:          uint16(channel.window >> 8),
@@ -59,14 +68,13 @@ func (channel *TCPChannel) sendTCP(flags uint16, data []byte) {
 		Acknowledgement: channel.acknowledgement,
 		OffsetFlags:     flags | TCPOffset,
 	}
-	channel.sequence++
-	headerData, err := restruct.Pack(binary.BigEndian, tcpSYNHeader)
+	headerData, err := restruct.Pack(binary.BigEndian, synHeader)
 	if err != nil {
 		fmt.Printf("RemoteDevice createChannel encode TCP error %s\n", err)
 	}
 
 	packetData :=  append(headerData, data...)
-	fmt.Printf("RemoteDevice sending TCP packet flags %x length %d\n", flags, len(packetData))
+	fmt.Printf("RemoteDevice sending TCP packet flags %x length %d sequence %d\n", flags, len(packetData), synHeader.Sequence)
 
 	channel.device.sendPacket(MUXProtocolTCP, packetData)
 }
@@ -78,8 +86,6 @@ func (header *TCPHeader) hasFlag(flag uint16) bool {
 }
 
 func (channel *TCPChannel) receivePacket(header *TCPHeader, data []byte) {
-	channel.acknowledgement = header.Sequence
-
 	if channel.state == TCPStateConnecting &&
 		header.hasFlag(TCPHeaderFlagSYN) &&
 		header.hasFlag(TCPHeaderFlagACK) {
@@ -91,5 +97,7 @@ func (channel *TCPChannel) receivePacket(header *TCPHeader, data []byte) {
 		channel.handler.connectionStateChange(channel.state)
 	}
 
-	channel.handler.receiveData(data)
+	if len(data) > 0 {
+		channel.handler.receiveData(data)
+	}
 }

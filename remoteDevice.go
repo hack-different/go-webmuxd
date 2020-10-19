@@ -98,6 +98,7 @@ type RemoteDevice struct {
 	transmitSequence uint16
 	receiveSequence uint16
 	sourcePort uint16
+	LockdownService *LockdownService
 }
 
 func (device *RemoteDevice) sendPacket(packetProtocol int, data []byte) {
@@ -249,6 +250,8 @@ func (device *RemoteDevice) receiveData(data []byte) {
 			}
 			device.versionHeader = &versionHeader
 			device.sendPacket(MUXProtocolSetup, []byte{0x05})
+
+			device.LockdownService = device.createLockdownService()
 		}
 	case MUXProtocolControl:
 		controlData := data[USBMuxDHeaderSize+1:muxHeader.Length]
