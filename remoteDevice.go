@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/restruct.v1"
 	"log"
 	"net/http"
 	"time"
@@ -24,6 +27,41 @@ const (
 
 	messageTypeData = 1
 )
+
+const (
+	MUXProtocolSendMagic   = 0xfeedface
+	MUXProtocolReceiveMagic = 0xfaceface
+
+	MUXProtocolVersion = 0
+	MUXProtocolControl = 1
+	MUXProtocolSetup   = 2
+	MUXProtocolTCP     = 6
+
+	MUXProtocolResultError = 0x03
+	MUXProtocolResultWarning = 0x05
+	MUXProtocolResultInfo = 0x07
+)
+
+
+
+type MUXHeader struct {
+	Protocol         uint32
+	Length           uint32
+	Magic            uint32
+	TransmitSequence uint16
+	ReceiveSequence  uint16
+}
+
+const (
+	MUXMajorVersion = 2
+	MUXMinorVersion = 8
+)
+
+type MUXVersion struct {
+	Major   uint32
+	Minor   uint32
+	Padding uint32
+}
 
 type RemoteConnection struct {
 	hub *Hub
@@ -50,6 +88,66 @@ type RemoteDevice struct {
 
 	// Device serial number
 	serialNumber string
+
+	versionHeader *MUXVersion
+
+	connectedMessage *DeviceConnected
+
+	channels map[uint16]*TCPChannel
+
+	transmitSequence uint16
+	receiveSequence uint16
+	sourcePort uint16
+}
+
+func (device *RemoteDevice) sendPacket(packetProtocol int, data []byte) {
+	if packetProtocol == MUXProtocolSetup {
+		device.receiveSequence = 0xFFFF
+		device.transmitSequence = 0x0000
+	}
+
+	muxHeader := &MUXHeader{
+		Protocol:         uint32(packetProtocol),
+		Length:           0,
+		Magic:            MUXProtocolSendMagic,
+		TransmitSequence: device.transmitSequence,
+		ReceiveSequence:  device.receiveSequence,
+	}
+	device.transmitSequence++
+
+	headerSize, err := restruct.SizeOf(muxHeader)
+	if err != nil {
+		fmt.Printf("RemoteDevice sizing muxHeader error %s\n", err)
+	}
+	muxHeader.Length = uint32(headerSize + len(data))
+
+	headerData, err := restruct.Pack(binary.BigEndian, muxHeader)
+	fmt.Printf("RemoteDevice sending %d packet tx %d rx %d of length %d\n", muxHeader.Protocol, muxHeader.TransmitSequence, muxHeader.ReceiveSequence, muxHeader.Length)
+	if err != nil {
+		fmt.Printf("RemoteDevice packing muxHeader error %s\n", err)
+	}
+
+	correlationId := uuid.New().String()
+
+	clientMessage := &ClientMessage {
+		Message: &ClientMessage_ToDevice {
+			ToDevice: &DataToDevice{
+				SerialNumber:  device.serialNumber,
+				CorrelationId: correlationId,
+				Data:          append(headerData, data...),
+			},
+		},
+	}
+
+	messageData, err := proto.Marshal(clientMessage)
+	if err != nil {
+		fmt.Printf("RemoteDevice error marshalling client message %s\n", err)
+	}
+
+	err = device.connection.connection.WriteMessage(websocket.BinaryMessage, messageData)
+	if err != nil {
+		fmt.Printf("RemoteDevice WriteMessage error %s\n", err)
+	}
 }
 
 // readPump pumps messages from the websocket connection to the hub.
@@ -91,21 +189,137 @@ func (remote *RemoteConnection) readPump() {
 		case *ServerMessage_DeviceConnected:
 			deviceConnectedMessage := serverMessage.GetDeviceConnected()
 			fmt.Printf("Device Connected %s\n", deviceConnectedMessage.SerialNumber)
-			remote.hub.devices[deviceConnectedMessage.SerialNumber] = &RemoteDevice{
-				hub:          remote.hub,
-				connection:   remote,
-				serialNumber: deviceConnectedMessage.SerialNumber,
+			device := &RemoteDevice{
+				sourcePort: 	  1024,
+				hub:              remote.hub,
+				connection:       remote,
+				serialNumber:     deviceConnectedMessage.SerialNumber,
+				connectedMessage: deviceConnectedMessage,
+				channels: 		  make(map[uint16]*TCPChannel),
 			}
 
+			remote.hub.devices[deviceConnectedMessage.SerialNumber] = device
+			device.sendVersion()
+
 		case *ServerMessage_FromDevice:
+			fromDeviceMessage := serverMessage.GetFromDevice()
+			fmt.Printf("Got %d bytes of data from device %s\n", len(fromDeviceMessage.Data), fromDeviceMessage.SerialNumber)
+			remote.hub.devices[fromDeviceMessage.SerialNumber].receiveData(fromDeviceMessage.Data)
 
 		case *ServerMessage_ToDeviceResult:
-
+			toDeviceResult := serverMessage.GetToDeviceResult()
+			fmt.Printf("Result of ToDevice transfer %s is %t\n", toDeviceResult.CorrelationId, toDeviceResult.Success)
 		}
 	}
 }
 
-func (remote *RemoteConnection)cleanupConnection() {
+func (device *RemoteDevice) receiveData(data []byte) {
+	if len(data) < USBMuxDHeaderSize {
+		fmt.Printf("Insufficant data for MUX header (got %d bytes)\n", len(data))
+		return
+	}
+
+	muxHeader := &MUXHeader{}
+	err := restruct.Unpack(data[:USBMuxDHeaderSize], binary.BigEndian, muxHeader)
+	if err != nil {
+		fmt.Printf("RemoteDevice mux header decoding error %s\n", err)
+		return
+	}
+
+	fmt.Printf("Got MUX Packet from device (type %d, length %d, tx %d, rx %d)\n",
+		muxHeader.Protocol, muxHeader.Length, muxHeader.TransmitSequence, muxHeader.ReceiveSequence)
+
+	if muxHeader.Protocol != MUXProtocolVersion && muxHeader.Magic != MUXProtocolReceiveMagic {
+		fmt.Printf("RemoteDevice mux header (%d) magic error %x != %x\n", muxHeader.Protocol, muxHeader.Magic, MUXProtocolReceiveMagic)
+		return
+	}
+
+	if muxHeader.Protocol != MUXProtocolVersion {
+		device.receiveSequence = muxHeader.ReceiveSequence
+	}
+
+	switch muxHeader.Protocol {
+	case MUXProtocolVersion:
+		if device.versionHeader == nil {
+			versionHeader := MUXVersion{}
+			err = restruct.Unpack(data[8:20], binary.BigEndian, versionHeader)
+			if err != nil {
+				fmt.Printf("RemoteDevice mux header decoding error %s\n", err)
+				return
+			}
+			device.versionHeader = &versionHeader
+			device.sendPacket(MUXProtocolSetup, []byte{0x05})
+		}
+	case MUXProtocolControl:
+		controlData := data[USBMuxDHeaderSize+1:muxHeader.Length]
+		controlType := data[USBMuxDHeaderSize]
+		switch controlType {
+		case MUXProtocolResultError:
+			fmt.Printf("Control Frame Error: %s\n", controlData)
+		case MUXProtocolResultWarning:
+			fmt.Printf("Control Frame Warn: %s\n", controlData)
+		case MUXProtocolResultInfo:
+			fmt.Printf("Control Frame Info: %s\n", controlData)
+		default:
+			fmt.Printf("Unknown Control Frame %d: %s\n", controlType, controlData)
+		}
+	case MUXProtocolTCP:
+		tcpHeader := &TCPHeader{}
+		tcpHeaderData := data[USBMuxDHeaderSize:USBMuxDHeaderSize+TCPHeaderSize]
+		err = restruct.Unpack(tcpHeaderData, binary.BigEndian, tcpHeader)
+		if err != nil {
+			fmt.Printf("RemoteDevice mux header decoding error %s\n", err)
+			return
+		}
+
+		channel := device.channels[tcpHeader.SourcePort]
+		if channel == nil {
+			fmt.Printf("Could not find an active channle for src %d and dst %d\n", tcpHeader.SourcePort, tcpHeader.DestinationPort)
+		} else {
+			channel.receivePacket(tcpHeader, data[USBMuxDHeaderSize+TCPHeaderSize:muxHeader.Length])
+		}
+
+	default:
+		fmt.Printf("RemoteDevice unknown (%d) with length %d and magic %x\n", muxHeader.Protocol, muxHeader.Length, muxHeader.Magic)
+	}
+
+	remainingBytes := data[muxHeader.Length:]
+	if len(remainingBytes) > 0 {
+		device.receiveData(remainingBytes)
+	}
+}
+
+func (device *RemoteDevice) createChannel(port uint16, handler TCPChannelHandler) *TCPChannel {
+	channel := &TCPChannel{
+		device: device,
+		sourcePort: device.sourcePort,
+		destinationPort: port,
+		window: 131072,
+		handler: handler,
+	}
+	device.channels[port] = channel
+	device.sourcePort++
+
+	channel.sendTCP(TCPHeaderFlagSYN, []byte{})
+
+	return channel
+}
+
+func (device *RemoteDevice) sendVersion() {
+	versionHeader := &MUXVersion{
+		Major:   MUXMajorVersion,
+		Minor:   MUXMinorVersion,
+		Padding: 0,
+	}
+
+	bytes, err := restruct.Pack(binary.BigEndian, versionHeader)
+	if err != nil {
+		fmt.Printf("RemoteDevice packing version error %s\n", err)
+	}
+	device.sendPacket(MUXProtocolVersion, bytes)
+}
+
+func (remote *RemoteConnection) cleanupConnection() {
 	remote.close <- true
 	remote.hub.remoteConnections[remote] = false
 
@@ -127,26 +341,26 @@ func (remote *RemoteConnection) writePump() {
 
 	for {
 		select {
-			case message := <- remote.send:
-				writer, err := remote.connection.NextWriter(messageTypeData)
+		case message := <-remote.send:
+			writer, err := remote.connection.NextWriter(messageTypeData)
+			if err != nil {
+				fmt.Printf("ClientMessage NextWriter Error: %s\n", err)
+			} else {
+				data, err := proto.Marshal(message)
 				if err != nil {
-					fmt.Printf("ClientMessage NextWriter Error: %s\n", err)
+					fmt.Printf("ClientMessage Marshal Error: %s\n", err)
 				} else {
-					data, err := proto.Marshal(message)
+					count, err := writer.Write(data)
 					if err != nil {
-						fmt.Printf("ClientMessage Marshal Error: %s\n",err)
+						fmt.Printf("ClientMessage Write Error: %s", err)
 					} else {
-						count, err := writer.Write(data)
-						if err != nil {
-							fmt.Printf("ClientMessage Write Error: %s", err)
-						} else {
-							fmt.Printf("ClientMessage Wrote %d bytes", count)
-						}
+						fmt.Printf("ClientMessage Wrote %d bytes", count)
 					}
 				}
-			case <- remote.close:
-				remote.open = false
-				return
+			}
+		case <-remote.close:
+			remote.open = false
+			return
 		}
 	}
 }
@@ -156,8 +370,8 @@ func (hub *Hub) makeRemoteConnection(wsConnection *websocket.Conn) *RemoteConnec
 		hub:        hub,
 		connection: wsConnection,
 		devices:    make(map[*RemoteDevice]bool),
-		open: true,
-		close: make(chan bool),
+		open:       true,
+		close:      make(chan bool),
 	}
 
 	hub.remoteConnected <- remoteConnection

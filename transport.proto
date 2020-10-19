@@ -4,6 +4,8 @@ option go_package = ".;main";
 // Direction is from Client to Server
 message DeviceConnected {
   string serialNumber = 1;
+  int32 vendorId = 2;
+  int32 productId = 3;
 }
 
 message DataFromDevice {

@@ -17,27 +17,36 @@ const USBMuxDResultSize = USBMuxDHeaderSize + 4
 
 const MessageTypeListDevices = "ListDevices"
 const MessageTypeListListen = "Listen"
+const MessageTypeListResult = "Result"
+const MessageTypeConnect = "Connect"
 const MessageTypeDeviceAttached = "Attached"
 
 const ConnectionSpeedUSB2 = 480000000
 
 const (
-	USBMuxDResultOK = 0
-	USBMuxDResultBadCommand = 1
-	USBMuxDResultBadDevice = 2
+	USBMuxDResultOK                = 0
+	USBMuxDResultBadCommand        = 1
+	USBMuxDResultBadDevice         = 2
 	USBMuxDResultConnectionRefused = 3
-	USBMuxDResultBadVersion = 6
+	USBMuxDResultBadVersion        = 6
 )
 
 const (
-	USBMuxDMessageResult  = 1
-	USBMuxDMessageConnect = 2
-	USBMuxDMessageListen = 3
-	USBMuxDMessageDeviceAdd = 4
+	USBMuxDMessageResult       = 1
+	USBMuxDMessageConnect      = 2
+	USBMuxDMessageListen       = 3
+	USBMuxDMessageDeviceAdd    = 4
 	USBMuxDMessageDeviceRemove = 5
 	USBMuxDMessageDevicePaired = 6
-	USBMuxDMessagePlist = 8
+	USBMuxDMessagePlist        = 8
 )
+
+type LocalClientTCPHandler struct {
+	deviceId uint32
+	port uint16
+	localClient *LocalClient
+	connectHeader *USBMuxDHeader
+}
 
 type USBMuxDHeader struct {
 	Length  uint32 `struct:"uint32"`
@@ -52,25 +61,30 @@ type USBMuxDResult struct {
 }
 
 type USBMuxDConnect struct {
-	Header USBMuxDHeader
+	Header   USBMuxDHeader
 	DeviceId uint32 `struct:"uint32"`
-	Port uint16 `struct:"uint16"`
+	Port     uint16 `struct:"uint16"`
 	Reserved uint16 `struct:"uint16"`
 }
 
 type USBMuxDDevice struct {
-	DeviceId uint32
-	ProductId uint16
+	DeviceId     uint32
+	ProductId    uint16
 	SerialNumber [256]byte
-	Padding uint16
-	Location uint32
+	Padding      uint16
+	Location     uint32
 }
 
 type USBMuxDPlistMessage struct {
 	ClientVersionString string
+	MessageType         string
+	ProgName            string
+	kLibUSBMuxVersion   uint64
+}
+
+type ResultMessage struct {
 	MessageType string
-	ProgName string
-	kLibUSBMuxVersion uint64
+	Number uint64
 }
 
 type ListDevicesMessage struct {
@@ -78,13 +92,13 @@ type ListDevicesMessage struct {
 }
 
 type DeviceAttachedProperties struct {
-	ConnectionSpeed uint32   `plist:"ConnectionSpeed"`
+	ConnectionSpeed uint32 `plist:"ConnectionSpeed"`
 	ConnectionType  string `plist:"ConnectionType"`
-	DeviceID        uint32   `plist:"DeviceID"`
-	LocationID      uint32   `plist:"LocationID"`
-	ProductID       uint32   `plist:"ProductID"`
+	DeviceID        uint32 `plist:"DeviceID"`
+	LocationID      uint32 `plist:"LocationID"`
+	ProductID       uint32 `plist:"ProductID"`
 	SerialNumber    string `plist:"SerialNumber"`
-	NetworkAddress 	[]byte `plist:"NetworkAddress"`
+	NetworkAddress  []byte `plist:"NetworkAddress"`
 }
 
 type DeviceAttached struct {
@@ -94,36 +108,47 @@ type DeviceAttached struct {
 }
 
 type LocalClient struct {
-	open bool
-	listening bool
+	open        bool
+	listening   bool
 	deviceIndex uint32
-	deviceMap map[uint32]*RemoteDevice
-	hub *Hub
-	connection *net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
+	deviceMap   map[uint32]*RemoteDevice
+	hub         *Hub
+	connection  *net.Conn
+	reader      *bufio.Reader
+	writer      *bufio.Writer
 
 	deviceAttached chan *RemoteDevice
-	deviceRemoved chan *RemoteDevice
+	deviceRemoved  chan *RemoteDevice
+
+	channels []*LocalClientChannel
 
 	close chan bool
 }
 
+type LocalClientChannel struct {
+	client   *LocalClient
+	port     uint16
+	deviceId uint32
+	device   *RemoteDevice
+	channel  *TCPChannel
+}
+
 func makeClient(hub *Hub, connection *net.Conn) *LocalClient {
 	return &LocalClient{
-		hub: hub,
-		open: true,
-		deviceIndex: 1,
+		hub:            hub,
+		open:           true,
+		deviceIndex:    1,
 		connection:     connection,
 		reader:         bufio.NewReader(*connection),
 		writer:         bufio.NewWriter(*connection),
 		deviceAttached: make(chan *RemoteDevice),
-		deviceRemoved: make(chan *RemoteDevice),
-		close: make(chan bool),
+		deviceRemoved:  make(chan *RemoteDevice),
+		channels:       make([]*LocalClientChannel, 0),
+		close:          make(chan bool),
 	}
 }
 
-func (client *LocalClient) run()  {
+func (client *LocalClient) run() {
 	go client.readPump()
 }
 
@@ -161,9 +186,9 @@ func (client *LocalClient) readPump() {
 			client.listening = true
 			listenResult := USBMuxDResult{
 				Header: USBMuxDHeader{
-					Length: USBMuxDResultSize,
+					Length:  USBMuxDResultSize,
 					Version: header.Version,
-					Tag: header.Tag,
+					Tag:     header.Tag,
 					Message: USBMuxDMessageResult,
 				},
 				Result: USBMuxDResultOK,
@@ -199,9 +224,9 @@ func (client *LocalClient) sendResponse(header USBMuxDHeader, result int) {
 	responseMessage := &USBMuxDResult{
 		Header: USBMuxDHeader{
 			Version: header.Version,
-			Tag: header.Tag,
+			Tag:     header.Tag,
 			Message: USBMuxDMessageResult,
-			Length: USBMuxDResultSize,
+			Length:  USBMuxDResultSize,
 		},
 		Result: uint32(result),
 	}
@@ -225,16 +250,46 @@ func (client *LocalClient) sendResponse(header USBMuxDHeader, result int) {
 	fmt.Printf("LocalClient response %d to tag %d\n", result, header.Tag)
 }
 
+func (handler *LocalClientTCPHandler) connectionStateChange(state int) {
+	switch state {
+	case TCPStateConnected:
+		result := &ResultMessage{
+			MessageType: MessageTypeListResult,
+			Number:      USBMuxDResultOK,
+		}
+		handler.localClient.sendPlistResponse(*handler.connectHeader, result)
+	}
+}
+
+func (handler *LocalClientTCPHandler)receiveData(data []byte) {
+
+}
+
 func (client *LocalClient) handlePlistMessage(header USBMuxDHeader, dictionary map[string]interface{}) {
+	client.ensureDeviceMap()
+
 	fmt.Printf("LocalClient handlePlistMessage Tag %d, Type: %s\n", header.Tag, dictionary["MessageType"])
 	switch dictionary["MessageType"] {
 
 	case MessageTypeListListen:
 		client.listening = true
 		client.sendResponse(header, USBMuxDResultOK)
+	case MessageTypeConnect:
+		deviceId := dictionary["DeviceID"].(uint64)
+		port := dictionary["PortNumber"].(uint64)
+
+		device := client.deviceMap[uint32(deviceId)]
+
+		handler := &LocalClientTCPHandler {
+			deviceId: uint32(deviceId),
+			port: uint16(port),
+			localClient: client,
+			connectHeader: &header,
+		}
+
+		device.createChannel(uint16(port), handler)
 
 	case MessageTypeListDevices:
-		client.ensureDeviceMap()
 		deviceList := &ListDevicesMessage{
 			DeviceList: make([]DeviceAttached, len(client.deviceMap)),
 		}
@@ -242,16 +297,16 @@ func (client *LocalClient) handlePlistMessage(header USBMuxDHeader, dictionary m
 		for index, device := range client.deviceMap {
 			deviceAttach := &DeviceAttached{
 				MessageType: MessageTypeDeviceAttached,
-				DeviceID: index,
+				DeviceID:    index,
 				Properties: DeviceAttachedProperties{
 					// TODO: Add these additional properties to `transport.proto` device connected
 					ConnectionSpeed: ConnectionSpeedUSB2,
-					ConnectionType: "Network",
-					NetworkAddress: []byte(fmt.Sprintf("%s.node1.dev.", device.serialNumber)),
-					DeviceID: index,
-					LocationID: 0,
-					ProductID: 0,
-					SerialNumber: device.serialNumber,
+					ConnectionType:  "USB",
+					NetworkAddress:  nil,
+					DeviceID:        index,
+					LocationID:      index,
+					ProductID:       uint32(device.connectedMessage.ProductId),
+					SerialNumber:    device.serialNumber,
 				},
 			}
 			deviceList.DeviceList[(index - 1)] = *deviceAttach
@@ -284,8 +339,8 @@ func (client *LocalClient) sendPlistResponse(header USBMuxDHeader, message inter
 
 	responseMessage := &USBMuxDHeader{
 		Message: USBMuxDMessagePlist,
-		Tag: header.Tag,
-		Length: uint32(USBMuxDHeaderSize + len(plistData)),
+		Tag:     header.Tag,
+		Length:  uint32(USBMuxDHeaderSize + len(plistData)),
 		Version: header.Version,
 	}
 

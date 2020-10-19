@@ -58,8 +58,8 @@ enum USBEventType {
 }
 
 message USBEndpoint {
-   uint32 endpointNumber = 1;
-   USBDirection direction = 2;
-   USBEndpointType type = 3;
-   uint64 packetSize = 4;
+  uint32 endpointNumber = 1;
+  USBDirection direction = 2;
+  USBEndpointType type = 3;
+  uint64 packetSize = 4;
 }
