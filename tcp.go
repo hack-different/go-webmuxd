@@ -16,12 +16,12 @@ const (
 )
 
 const (
-	TCPStateNew = 0
+	TCPStateNew        = 0
 	TCPStateConnecting = 1
-	TCPStateConnected = 2
-	TCPStateClosing = 3
-	TCPStateClosed = 4
-	TCPStateRefused = 5
+	TCPStateConnected  = 2
+	TCPStateClosing    = 3
+	TCPStateClosed     = 4
+	TCPStateRefused    = 5
 )
 
 type TCPChannelHandler interface {
@@ -44,19 +44,19 @@ const TCPHeaderSize = 20
 const TCPOffset = 0x05 << 12
 
 type TCPChannel struct {
-	device *RemoteDevice
-	handler TCPChannelHandler
-	sourcePort uint16
+	device          *RemoteDevice
+	handler         TCPChannelHandler
+	sourcePort      uint16
 	destinationPort uint16
-	tx_sequence uint32
-	rx_sequence uint32
+	tx_sequence     uint32
+	rx_sequence     uint32
 	acknowledgement uint32
-	window uint32
-	state int
+	window          uint32
+	state           int
 }
 
 func (channel *TCPChannel) send(data []byte) {
-	channel.sendTCP(ACK, data)
+	channel.sendTCP(TCPHeaderFlagACK, data)
 }
 
 func (channel *TCPChannel) sendTCP(flags uint16, data []byte) {
@@ -64,7 +64,7 @@ func (channel *TCPChannel) sendTCP(flags uint16, data []byte) {
 		SourcePort:      channel.sourcePort,
 		DestinationPort: channel.destinationPort,
 		Window:          uint16(channel.window >> 8),
-		Sequence:        channel.sequence,
+		Sequence:        channel.tx_sequence,
 		Acknowledgement: channel.acknowledgement,
 		OffsetFlags:     flags | TCPOffset,
 	}
@@ -73,7 +73,7 @@ func (channel *TCPChannel) sendTCP(flags uint16, data []byte) {
 		fmt.Printf("RemoteDevice createChannel encode TCP error %s\n", err)
 	}
 
-	packetData :=  append(headerData, data...)
+	packetData := append(headerData, data...)
 	fmt.Printf("RemoteDevice sending TCP packet flags %x length %d sequence %d\n", flags, len(packetData), synHeader.Sequence)
 
 	channel.device.sendPacket(MUXProtocolTCP, packetData)

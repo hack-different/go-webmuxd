@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
-	"github.com/DHowett/go-plist"
 	"gopkg.in/restruct.v1"
+	"howett.net/plist"
 	"io"
 	"net"
 )
@@ -42,9 +42,9 @@ const (
 )
 
 type LocalClientTCPHandler struct {
-	deviceId uint32
-	port uint16
-	localClient *LocalClient
+	deviceId      uint32
+	port          uint16
+	localClient   *LocalClient
 	connectHeader *USBMuxDHeader
 }
 
@@ -84,7 +84,7 @@ type USBMuxDPlistMessage struct {
 
 type ResultMessage struct {
 	MessageType string
-	Number uint64
+	Number      uint64
 }
 
 type ListDevicesMessage struct {
@@ -261,7 +261,7 @@ func (handler *LocalClientTCPHandler) connectionStateChange(state int) {
 	}
 }
 
-func (handler *LocalClientTCPHandler)receiveData(data []byte) {
+func (handler *LocalClientTCPHandler) receiveData(data []byte) {
 
 }
 
@@ -280,10 +280,10 @@ func (client *LocalClient) handlePlistMessage(header USBMuxDHeader, dictionary m
 
 		device := client.deviceMap[uint32(deviceId)]
 
-		handler := &LocalClientTCPHandler {
-			deviceId: uint32(deviceId),
-			port: uint16(port),
-			localClient: client,
+		handler := &LocalClientTCPHandler{
+			deviceId:      uint32(deviceId),
+			port:          uint16(port),
+			localClient:   client,
 			connectHeader: &header,
 		}
 
