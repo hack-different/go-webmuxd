@@ -43,11 +43,15 @@ func (service *PropertyListService) receiveData(data []byte) {
 		service.receiving = &PropertyListDatagram{}
 
 		restruct.Unpack(data, binary.BigEndian, service.receiving)
+		service.receiving.Data = data[4:]
+		fmt.Printf("PropertyListService beginReceive got %d bytes of %d\n", len(service.receiving.Data), service.receiving.Length)
 	} else {
 		service.receiving.Data = append(service.receiving.Data, data...)
+		fmt.Printf("PropertyListService continueReceive got %d new bytes (at %d of %d)\n", len(data), len(service.receiving.Data), service.receiving.Length)
 	}
 
 	if service.receiving != nil && service.receiving.Length == uint32(len(service.receiving.Data)) {
+		fmt.Printf("PropertyListService completeReceive with %d bytes\n", service.receiving.Length)
 		result := make(map[string]interface{})
 
 		_, err := plist.Unmarshal(service.receiving.Data, result)

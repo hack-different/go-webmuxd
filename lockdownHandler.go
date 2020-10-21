@@ -7,6 +7,11 @@ type LockdownQueryTypeMessage struct {
 	Label   string
 }
 
+type LockdownGetValueMessage struct {
+	Label   string
+	Request string
+}
+
 type LockdownService struct {
 	propertyListService *PropertyListService
 }
@@ -21,7 +26,7 @@ func (service *LockdownService) connected() {
 
 func (service *LockdownService) plistReceived(data map[string]interface{}) {
 	if data["Request"] == "QueryType" {
-		getValueMessage := &LockdownQueryTypeMessage{
+		getValueMessage := &LockdownGetValueMessage{
 			Request: "GetValue",
 			Label:   "webmuxd",
 		}

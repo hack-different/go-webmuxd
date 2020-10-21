@@ -100,6 +100,7 @@ func (channel *TCPChannel) sendTCP(flags uint16, data []byte) {
 	}
 
 	channel.txBytes += uint32(len(data))
+	channel.txSequence += uint32(len(data))
 
 	fmt.Printf("TCPChannel sending packet flags %x, seq %d, ack %d, length %d\n", flags, header.Sequence, header.Acknowledgement, len(data))
 	if channel.state != TCPStateConnecting {
@@ -125,9 +126,9 @@ func (header *TCPHeader) hasFlag(flag uint16) bool {
 
 func (channel *TCPChannel) receivePacket(header *TCPHeader, data []byte) {
 	fmt.Printf("TCPChannel received packet flags %x, seq %d, ack %d, length %d\n", header.OffsetFlags, header.Sequence, header.Acknowledgement, len(data))
-	fmt.Printf("Packet Data: %s\n", data)
+
 	channel.rxSequence = header.Sequence
-	channel.txAcknowledgement = header.Acknowledgement
+	channel.rxAcknowledgement = header.Acknowledgement
 
 	if header.hasFlag(TCPHeaderFlagRST) {
 		channel.state = TCPStateRefused
@@ -155,16 +156,20 @@ func (channel *TCPChannel) receivePacket(header *TCPHeader, data []byte) {
 		channel.txSequence++
 		channel.txAcknowledgement++
 		channel.rxBytes = channel.rxSequence
-
 		channel.state = TCPStateConnected
 		channel.handler.connectionStateChange(channel.state)
+		return
 	}
 
-	if len(data) > 0 {
-		channel.rxBytes += uint32(len(data))
+	if channel.state == TCPStateConnected {
+		if len(data) > 0 {
+			channel.rxBytes += uint32(len(data))
+			channel.txAcknowledgement += uint32(len(data))
 
-		channel.handler.receiveData(data)
-	} else {
-		channel.rxBytes++
+			channel.sendTCP(TCPHeaderFlagACK, []byte{})
+
+			channel.handler.receiveData(data)
+		}
 	}
+
 }
