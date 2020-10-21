@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"gopkg.in/restruct.v1"
 	"howett.net/plist"
 )
 
@@ -11,16 +13,25 @@ type PropertyListServiceClient interface {
 }
 
 type PropertyListServiceDescriptor struct {
-	port uint16
+	port      uint16
 	encrypted bool
+}
+
+type PropertyListDatagram struct {
+	Length uint32
+	Data   []byte
 }
 
 type PropertyListService struct {
 	descriptor PropertyListServiceDescriptor
-	channel *TCPChannel
-	handler PropertyListServiceClient
+	channel    *TCPChannel
+	handler    PropertyListServiceClient
+	sending    *PropertyListDatagram
+	receiving  *PropertyListDatagram
 }
+
 func (service *PropertyListService) connectionStateChange(state int) {
+	fmt.Printf("PropertyListService state change %d\n", state)
 	switch state {
 	case TCPStateConnected:
 		service.handler.connected()
@@ -28,14 +39,26 @@ func (service *PropertyListService) connectionStateChange(state int) {
 }
 
 func (service *PropertyListService) receiveData(data []byte) {
-	result := make(map[string]interface{})
+	if service.receiving == nil {
+		service.receiving = &PropertyListDatagram{}
 
-	_, err := plist.Unmarshal(data, result)
-	if err != nil {
-		fmt.Printf("PropertyListSerivce (%d) length %d unmarshal error\n", service.descriptor.port, len(data))
+		restruct.Unpack(data, binary.BigEndian, service.receiving)
+	} else {
+		service.receiving.Data = append(service.receiving.Data, data...)
 	}
 
-	service.handler.plistReceived(result)
+	if service.receiving != nil && service.receiving.Length == uint32(len(service.receiving.Data)) {
+		result := make(map[string]interface{})
+
+		_, err := plist.Unmarshal(service.receiving.Data, result)
+		if err != nil {
+			fmt.Printf("PropertyListSerivce (%d) length %d unmarshal error\n", service.descriptor.port, len(data))
+		}
+
+		service.receiving = nil
+
+		service.handler.plistReceived(result)
+	}
 }
 
 func (service *PropertyListService) sendPropertyList(data interface{}) {
@@ -50,16 +73,23 @@ func (service *PropertyListService) sendPropertyList(data interface{}) {
 		return
 	}
 
-	service.channel.send(rawData)
+	datagram := &PropertyListDatagram{
+		Length: uint32(len(rawData)),
+		Data:   rawData,
+	}
+
+	datagramBytes, _ := restruct.Pack(binary.BigEndian, datagram)
+
+	service.channel.send(datagramBytes)
 }
 
 func (device *RemoteDevice) createService(descriptor PropertyListServiceDescriptor, handler PropertyListServiceClient) *PropertyListService {
 	service := &PropertyListService{
 		descriptor: descriptor,
-		handler: handler,
+		handler:    handler,
 	}
 
-	service.channel = device.createChannel(descriptor.port, service)
+	service.channel = device.createTCPChannel(descriptor.port, service)
 
 	return service
 }

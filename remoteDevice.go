@@ -29,7 +29,7 @@ const (
 )
 
 const (
-	MUXProtocolSendMagic   = 0xfeedface
+	MUXProtocolSendMagic    = 0xfeedface
 	MUXProtocolReceiveMagic = 0xfaceface
 
 	MUXProtocolVersion = 0
@@ -37,12 +37,10 @@ const (
 	MUXProtocolSetup   = 2
 	MUXProtocolTCP     = 6
 
-	MUXProtocolResultError = 0x03
+	MUXProtocolResultError   = 0x03
 	MUXProtocolResultWarning = 0x05
-	MUXProtocolResultInfo = 0x07
+	MUXProtocolResultInfo    = 0x07
 )
-
-
 
 type MUXHeader struct {
 	Protocol         uint32
@@ -96,9 +94,9 @@ type RemoteDevice struct {
 	channels map[uint16]*TCPChannel
 
 	transmitSequence uint16
-	receiveSequence uint16
-	sourcePort uint16
-	LockdownService *LockdownService
+	receiveSequence  uint16
+	sourcePort       uint16
+	LockdownService  *LockdownService
 }
 
 func (device *RemoteDevice) sendPacket(packetProtocol int, data []byte) {
@@ -130,8 +128,8 @@ func (device *RemoteDevice) sendPacket(packetProtocol int, data []byte) {
 
 	correlationId := uuid.New().String()
 
-	clientMessage := &ClientMessage {
-		Message: &ClientMessage_ToDevice {
+	clientMessage := &ClientMessage{
+		Message: &ClientMessage_ToDevice{
 			ToDevice: &DataToDevice{
 				SerialNumber:  device.serialNumber,
 				CorrelationId: correlationId,
@@ -191,12 +189,12 @@ func (remote *RemoteConnection) readPump() {
 			deviceConnectedMessage := serverMessage.GetDeviceConnected()
 			fmt.Printf("Device Connected %s\n", deviceConnectedMessage.SerialNumber)
 			device := &RemoteDevice{
-				sourcePort: 	  1024,
+				sourcePort:       1024,
 				hub:              remote.hub,
 				connection:       remote,
 				serialNumber:     deviceConnectedMessage.SerialNumber,
 				connectedMessage: deviceConnectedMessage,
-				channels: 		  make(map[uint16]*TCPChannel),
+				channels:         make(map[uint16]*TCPChannel),
 			}
 
 			remote.hub.devices[deviceConnectedMessage.SerialNumber] = device
@@ -254,7 +252,7 @@ func (device *RemoteDevice) receiveData(data []byte) {
 			device.LockdownService = device.createLockdownService()
 		}
 	case MUXProtocolControl:
-		controlData := data[USBMuxDHeaderSize+1:muxHeader.Length]
+		controlData := data[USBMuxDHeaderSize+1 : muxHeader.Length]
 		controlType := data[USBMuxDHeaderSize]
 		switch controlType {
 		case MUXProtocolResultError:
@@ -268,7 +266,7 @@ func (device *RemoteDevice) receiveData(data []byte) {
 		}
 	case MUXProtocolTCP:
 		tcpHeader := &TCPHeader{}
-		tcpHeaderData := data[USBMuxDHeaderSize:USBMuxDHeaderSize+TCPHeaderSize]
+		tcpHeaderData := data[USBMuxDHeaderSize : USBMuxDHeaderSize+TCPHeaderSize]
 		err = restruct.Unpack(tcpHeaderData, binary.BigEndian, tcpHeader)
 		if err != nil {
 			fmt.Printf("RemoteDevice mux header decoding error %s\n", err)
@@ -290,22 +288,6 @@ func (device *RemoteDevice) receiveData(data []byte) {
 	if len(remainingBytes) > 0 {
 		device.receiveData(remainingBytes)
 	}
-}
-
-func (device *RemoteDevice) createChannel(port uint16, handler TCPChannelHandler) *TCPChannel {
-	channel := &TCPChannel{
-		device: device,
-		sourcePort: device.sourcePort,
-		destinationPort: port,
-		window: 131072,
-		handler: handler,
-	}
-	device.channels[port] = channel
-	device.sourcePort++
-
-	channel.sendTCP(TCPHeaderFlagSYN, []byte{})
-
-	return channel
 }
 
 func (device *RemoteDevice) sendVersion() {
@@ -366,6 +348,18 @@ func (remote *RemoteConnection) writePump() {
 			return
 		}
 	}
+}
+
+func (device *RemoteDevice) createTCPChannel(port uint16, handler TCPChannelHandler) *TCPChannel {
+	channel := createChannel(device.sourcePort, port, device, handler)
+	device.sourcePort++
+	device.channels[port] = channel
+
+	return channel
+}
+
+func (device *RemoteDevice) sendTCPData(data []byte) {
+	device.sendPacket(MUXProtocolTCP, data)
 }
 
 func (hub *Hub) makeRemoteConnection(wsConnection *websocket.Conn) *RemoteConnection {

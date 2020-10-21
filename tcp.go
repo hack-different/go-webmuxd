@@ -24,6 +24,10 @@ const (
 	TCPStateRefused    = 5
 )
 
+type TCPChannelSender interface {
+	sendTCPData(data []byte)
+}
+
 type TCPChannelHandler interface {
 	receiveData(data []byte)
 	connectionStateChange(state int)
@@ -44,15 +48,41 @@ const TCPHeaderSize = 20
 const TCPOffset = 0x05 << 12
 
 type TCPChannel struct {
-	device          *RemoteDevice
-	handler         TCPChannelHandler
-	sourcePort      uint16
-	destinationPort uint16
-	tx_sequence     uint32
-	rx_sequence     uint32
-	acknowledgement uint32
-	window          uint32
-	state           int
+	handler           TCPChannelHandler
+	sender            TCPChannelSender
+	sourcePort        uint16
+	destinationPort   uint16
+	txSequence        uint32
+	rxSequence        uint32
+	txAcknowledgement uint32
+	rxAcknowledgement uint32
+	rxBytes           uint32
+	txBytes           uint32
+	window            uint32
+	state             int
+}
+
+func createChannel(sourcePort uint16, destinationPort uint16, sender TCPChannelSender, handler TCPChannelHandler) *TCPChannel {
+	fmt.Printf("Creating TCPChannel srcPort %d, dstPort %d\n", sourcePort, destinationPort)
+	channel := &TCPChannel{
+		state:             TCPStateNew,
+		sender:            sender,
+		sourcePort:        sourcePort,
+		destinationPort:   destinationPort,
+		window:            131072,
+		handler:           handler,
+		txSequence:        0,
+		rxSequence:        0,
+		txAcknowledgement: 0,
+		rxAcknowledgement: 0,
+		rxBytes:           0,
+		txBytes:           0,
+	}
+
+	channel.sendTCP(TCPHeaderFlagSYN, []byte{})
+	channel.state = TCPStateConnecting
+
+	return channel
 }
 
 func (channel *TCPChannel) send(data []byte) {
@@ -60,23 +90,31 @@ func (channel *TCPChannel) send(data []byte) {
 }
 
 func (channel *TCPChannel) sendTCP(flags uint16, data []byte) {
-	synHeader := &TCPHeader{
+	header := &TCPHeader{
 		SourcePort:      channel.sourcePort,
 		DestinationPort: channel.destinationPort,
 		Window:          uint16(channel.window >> 8),
-		Sequence:        channel.tx_sequence,
-		Acknowledgement: channel.acknowledgement,
+		Sequence:        channel.txSequence,
+		Acknowledgement: channel.txAcknowledgement,
 		OffsetFlags:     flags | TCPOffset,
 	}
-	headerData, err := restruct.Pack(binary.BigEndian, synHeader)
+
+	channel.txBytes += uint32(len(data))
+
+	fmt.Printf("TCPChannel sending packet flags %x, seq %d, ack %d, length %d\n", flags, header.Sequence, header.Acknowledgement, len(data))
+	if channel.state != TCPStateConnecting {
+
+	}
+
+	headerData, err := restruct.Pack(binary.BigEndian, header)
 	if err != nil {
 		fmt.Printf("RemoteDevice createChannel encode TCP error %s\n", err)
 	}
 
 	packetData := append(headerData, data...)
-	fmt.Printf("RemoteDevice sending TCP packet flags %x length %d sequence %d\n", flags, len(packetData), synHeader.Sequence)
+	fmt.Printf("RemoteDevice sending TCP packet flags %x length %d sequence %d\n", flags, len(packetData), header.Sequence)
 
-	channel.device.sendPacket(MUXProtocolTCP, packetData)
+	channel.sender.sendTCPData(packetData)
 }
 
 func (header *TCPHeader) hasFlag(flag uint16) bool {
@@ -86,18 +124,47 @@ func (header *TCPHeader) hasFlag(flag uint16) bool {
 }
 
 func (channel *TCPChannel) receivePacket(header *TCPHeader, data []byte) {
+	fmt.Printf("TCPChannel received packet flags %x, seq %d, ack %d, length %d\n", header.OffsetFlags, header.Sequence, header.Acknowledgement, len(data))
+	fmt.Printf("Packet Data: %s\n", data)
+	channel.rxSequence = header.Sequence
+	channel.txAcknowledgement = header.Acknowledgement
+
+	if header.hasFlag(TCPHeaderFlagRST) {
+		channel.state = TCPStateRefused
+		channel.handler.connectionStateChange(channel.state)
+		return
+	}
+
+	if header.hasFlag(TCPHeaderFlagFIN) && channel.state != TCPStateClosing {
+		channel.state = TCPStateClosing
+		channel.handler.connectionStateChange(channel.state)
+		channel.sendTCP(TCPHeaderFlagFIN|TCPHeaderFlagACK, []byte{})
+		return
+	}
+
+	if channel.state == TCPStateClosing && header.hasFlag(TCPHeaderFlagACK) {
+		channel.state = TCPStateClosed
+		channel.handler.connectionStateChange(channel.state)
+		return
+	}
+
 	if channel.state == TCPStateConnecting &&
 		header.hasFlag(TCPHeaderFlagSYN) &&
 		header.hasFlag(TCPHeaderFlagACK) {
 
-		channel.sendTCP(TCPHeaderFlagACK, []byte{})
+		channel.txSequence++
+		channel.txAcknowledgement++
+		channel.rxBytes = channel.rxSequence
 
 		channel.state = TCPStateConnected
-
 		channel.handler.connectionStateChange(channel.state)
 	}
 
 	if len(data) > 0 {
+		channel.rxBytes += uint32(len(data))
+
 		channel.handler.receiveData(data)
+	} else {
+		channel.rxBytes++
 	}
 }

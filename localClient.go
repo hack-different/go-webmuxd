@@ -46,6 +46,8 @@ type LocalClientTCPHandler struct {
 	port          uint16
 	localClient   *LocalClient
 	connectHeader *USBMuxDHeader
+	device        *RemoteDevice
+	channel       *TCPChannel
 }
 
 type USBMuxDHeader struct {
@@ -120,17 +122,9 @@ type LocalClient struct {
 	deviceAttached chan *RemoteDevice
 	deviceRemoved  chan *RemoteDevice
 
-	channels []*LocalClientChannel
+	channels []*LocalClientTCPHandler
 
 	close chan bool
-}
-
-type LocalClientChannel struct {
-	client   *LocalClient
-	port     uint16
-	deviceId uint32
-	device   *RemoteDevice
-	channel  *TCPChannel
 }
 
 func makeClient(hub *Hub, connection *net.Conn) *LocalClient {
@@ -143,7 +137,7 @@ func makeClient(hub *Hub, connection *net.Conn) *LocalClient {
 		writer:         bufio.NewWriter(*connection),
 		deviceAttached: make(chan *RemoteDevice),
 		deviceRemoved:  make(chan *RemoteDevice),
-		channels:       make([]*LocalClientChannel, 0),
+		channels:       make([]*LocalClientTCPHandler, 0),
 		close:          make(chan bool),
 	}
 }
@@ -251,6 +245,7 @@ func (client *LocalClient) sendResponse(header USBMuxDHeader, result int) {
 }
 
 func (handler *LocalClientTCPHandler) connectionStateChange(state int) {
+	fmt.Printf("LocalClientTCPHandler connectionStateChanged %d\n", state)
 	switch state {
 	case TCPStateConnected:
 		result := &ResultMessage{
@@ -285,9 +280,10 @@ func (client *LocalClient) handlePlistMessage(header USBMuxDHeader, dictionary m
 			port:          uint16(port),
 			localClient:   client,
 			connectHeader: &header,
+			device:        device,
 		}
 
-		device.createChannel(uint16(port), handler)
+		handler.channel = device.createTCPChannel(uint16(port), handler)
 
 	case MessageTypeListDevices:
 		deviceList := &ListDevicesMessage{

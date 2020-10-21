@@ -4,7 +4,7 @@ const LockdownPort = 0xf27e
 
 type LockdownQueryTypeMessage struct {
 	Request string
-	Label string
+	Label   string
 }
 
 type LockdownService struct {
@@ -14,18 +14,25 @@ type LockdownService struct {
 func (service *LockdownService) connected() {
 	handshake := &LockdownQueryTypeMessage{
 		Request: "QueryType",
-		Label: "webserver",
+		Label:   "webserver",
 	}
 	service.propertyListService.sendPropertyList(handshake)
 }
 
-func (service *LockdownService) plistReceived(data map[string]interface{}){
+func (service *LockdownService) plistReceived(data map[string]interface{}) {
+	if data["Request"] == "QueryType" {
+		getValueMessage := &LockdownQueryTypeMessage{
+			Request: "GetValue",
+			Label:   "webmuxd",
+		}
 
+		service.propertyListService.sendPropertyList(getValueMessage)
+	}
 }
 
-func (device *RemoteDevice) createLockdownService() *LockdownService  {
+func (device *RemoteDevice) createLockdownService() *LockdownService {
 	serviceDescriptor := PropertyListServiceDescriptor{
-		port: LockdownPort,
+		port:      LockdownPort,
 		encrypted: false,
 	}
 
